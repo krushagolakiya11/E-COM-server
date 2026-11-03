@@ -4,7 +4,7 @@ exports.up = function(knex) {
 
     table.string("name").notNullable().unique();
 
-    table.timestamp(true, true);
+    table.timestamps(true, true);
   })
 };
 

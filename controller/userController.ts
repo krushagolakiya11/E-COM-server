@@ -1,29 +1,80 @@
-const knex = require("../config/knex");
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
+import { Request, Response } from "express";
+import knex from "../config/knex";
+import bcrypt from "bcryptjs"
+import jwt, { type SignOptions } from "jsonwebtoken"
+
+interface LoginRequest{
+    email: string;
+    password: string;
+}
+
+interface CreateUserBody {
+    first_name: string,
+    last_name: string,
+    email: string,
+    password: string,
+    phone: string,
+    gender: "male" | "female" | "other",
+    dob?: string | null;
+}
+
+interface UpdateUserBody{
+   first_name: string,
+    last_name: string,
+    email: string,
+    password: string,
+    phone: string,
+    gender: "male" | "female" | "other",
+    dob?: string | null; 
+}
+
+interface SafeUser{
+    id: number,
+    first_name: string,
+    last_name: string,
+    email: string,
+    password: string,
+    phone: string,
+    gender: "male" | "female" | "other",
+    dob: string | null,
+    is_verified: boolean;
+}
 
 // login
-exports.login = async (req, res) => {
+export const login = async (req: Request<{}, {}, LoginRequest>, res: Response): Promise<void> => {
     try {
         const { email, password } = req.body;
         if(!email || !password){
-            res.status(400).json({ message: "Email and passwords are required" })
+            res.status(400).json({ message: "Email and passwords are required" });
+            return;
         }
 
         const user = await knex("users").where({ email }).first();
         if(!user){
-            return res.status(401).json({ message: "Invalid credentials"});
+            res.status(401).json({ message: "Invalid credentials"});
+            return;
         }
 
         const isMatch = await bcrypt.compare(password, user.password);
         if(!isMatch){
-            return res.status(401).json({message: "Invalid credentials"});
+            res.status(401).json({message: "Invalid credentials"});
+            return;
+        }
+
+        const secret = process.env.JWT_SECRET;
+        if(!secret){
+            res.status(500).json({message: "JWT_SECRET is not configured"});
+            return;
+        }
+
+        const options: SignOptions = {
+            expiresIn: (process.env.JWT_EXPIRES_IN || "1d") as SignOptions["expiresIn"]
         }
 
         const token = jwt.sign(
             { id: user.id, email: user.email },
-            process.env.JWT_SECRET,
-            {expiresIn: process.env.JWT_EXPIRES_IN || "1d"}
+            secret,
+            options
         );
 
         res.status(200).json({
@@ -36,19 +87,19 @@ exports.login = async (req, res) => {
                 email: user.email,
             }
         })
-    } catch (error) {
+    } catch (error: any) {
         res.status(500).json({message: error.message});
     }
 }
 
 // get all users — safe fields only, with pagination
-exports.getUser = async (req, res) => {
+export const getUser = async (req: Request, res: Response): Promise<void> => {
     try {
-        const page = Math.max(1, parseInt(req.query.page) || 1);
-        const limit = Math.min(100, parseInt(req.query.limit) || 20);
+        const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
+        const limit = Math.min(100, parseInt(String(req.query.limit ?? "20"), 10) || 20);
         const offset = (page - 1) * limit;
 
-        const users = await knex("users")
+        const users: SafeUser[] = await knex("users")
             .select("id", "first_name", "last_name", "email", "password", "phone", "gender", "dob", "is_verified")
             .limit(limit)
             .offset(offset)
@@ -58,15 +109,15 @@ exports.getUser = async (req, res) => {
 
         res.status(200).json({
             data: users,
-            meta: { page, limit, total: parseInt(count) },
+            meta: { page, limit, total: parseInt(String(count)) },
         });
-    } catch (error) {
+    } catch (error: any) {
         res.status(500).json({ message: error.message });
     }
 };
 
 // create user
-exports.createUser = async (req, res) => {
+export const createUser = async (req: Request<{}, {}, CreateUserBody>, res: Response) => {
     try {
         const { first_name, last_name, email, password, phone, gender, dob } = req.body;
 
@@ -80,19 +131,19 @@ exports.createUser = async (req, res) => {
             .returning(["id", "first_name", "last_name", "email", "password", "phone", "gender", "dob", "is_verified"]);
 
         res.status(201).json(user);
-    } catch (error) {
+    } catch (error: any) {
         res.status(500).json({ message: error.message });
     }
 };
 
 // update user — allowlist to prevent mass-assignment
-exports.updateUser = async (req, res) => {
+export const updateUser = async (req: Request<{id: string}, {}, UpdateUserBody>, res: Response): Promise<void> => {
     try {
         const { id } = req.params;
 
         // Only allow safe fields to be updated
         const { first_name, last_name, email, password, phone, gender, dob } = req.body;
-        const updates = {};
+        const updates: Record<string, unknown> = {};
         if (first_name !== undefined) updates.first_name = first_name;
         if (last_name !== undefined) updates.last_name = last_name;
         if (email !== undefined) updates.email = email;
@@ -103,13 +154,15 @@ exports.updateUser = async (req, res) => {
 
         if (password !== undefined) {
             if (password.length < 8) {
-                return res.status(400).json({ message: "password must be atleast 8 characters" })
+                res.status(400).json({ message: "password must be atleast 8 characters" })
+                return;
             }
             updates.password = await bcrypt.hash(password, 10);
         }
 
         if (Object.keys(updates).length === 0) {
-            return res.status(400).json({ message: "No valid fields provided to update" });
+            res.status(400).json({ message: "No valid fields provided to update" });
+            return;
         }
 
         const [user] = await knex("users")
@@ -118,28 +171,30 @@ exports.updateUser = async (req, res) => {
             .returning(["id", "first_name", "last_name", "email", "password", "phone", "gender", "dob", "is_verified"]);
 
         if (!user) {
-            return res.status(404).json({ message: "User Not Found" });
+            res.status(404).json({ message: "User Not Found" });
+            return;
         }
 
         res.status(200).json(user);
-    } catch (error) {
+    } catch (error: any) {
         res.status(500).json({ message: error.message });
     }
 };
 
 // delete user
-exports.deleteUser = async (req, res) => {
+export const deleteUser = async (req: Request<{id: string}>, res: Response) => {
     try {
         const { id } = req.params;
 
         const deleted = await knex("users").where({ id }).del();
 
         if (!deleted) {
-            return res.status(404).json({ message: "User Not Found" });
+            res.status(404).json({ message: "User Not Found" });
+            return;
         }
 
         res.status(200).json({ message: "User Deleted Successfully" });
-    } catch (error) {
+    } catch (error: any) {
         res.status(500).json({ message: error.message });
     }
 };
